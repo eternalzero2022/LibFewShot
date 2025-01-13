@@ -86,11 +86,55 @@ class CLDFD(FinetuningModel):
 
     def set_forward(self, batch):
         """
-        评估阶段的前向传播。
+        评估阶段的前向传播逻辑。
+
+        :param batch: 包含输入图像和标签的元组 (images, global_targets)
+        :return: 输出预测结果和分类准确率
         """
-        # TODO: 实现评估阶段的逻辑
-        # 提示：划分支撑集与查询集，调用 set_forward_adaptation 进行适应，最后计算准确率。
-        pass
+        images, global_targets = batch
+        images = images.to(self.device)
+
+        # Step 1: 特征提取
+        # 从学生模型提取特征
+        with torch.no_grad():
+            features = self.emb_func(images)
+
+        # Step 2: 支撑集和查询集划分
+        # 将批量数据分解为多个任务 (episode)，每个任务有支撑集和查询集
+        support_feat, query_feat, support_target, query_target = self.split_by_episode(
+            features, mode=1
+        )
+
+        episode_size = support_feat.size(0)  # 每个批次中的任务数
+        output_list = []
+        acc_list = []
+
+        # Step 3: 逐任务处理
+        for idx in range(episode_size):
+            SF = support_feat[idx]  # 支撑集特征
+            QF = query_feat[idx]  # 查询集特征
+            ST = support_target[idx]  # 支撑集标签
+            QT = query_target[idx]  # 查询集标签
+
+            # Step 4: 支撑集上适应阶段
+            classifier = self.set_forward_adaptation(SF, ST)
+
+            # Step 5: 查询集预测
+            # 归一化查询集特征并转换为 numpy 格式，供分类器使用
+            QF = F.normalize(QF, p=2, dim=1).detach().cpu().numpy()
+            QT = QT.detach().cpu().numpy()
+
+            # 利用分类器进行预测
+            output = classifier.predict(QF)
+            acc = metrics.accuracy_score(QT, output) * 100  # 计算准确率
+
+            output_list.append(output)
+            acc_list.append(acc)
+
+        # 整理任务的预测结果和平均准确率
+        output = np.stack(output_list, axis=0)
+        acc = sum(acc_list) / episode_size
+        return output, acc
 
     def set_forward_loss(self, batch):
         """
@@ -102,11 +146,32 @@ class CLDFD(FinetuningModel):
 
     def set_forward_adaptation(self, support_feat, support_target):
         """
-        适应阶段（在支撑集上训练分类器）。
+        在支撑集上进行分类器的动态训练，适应少样本任务。
+
+        :param support_feat: 支撑集特征 (support features)
+        :param support_target: 支撑集标签 (support targets)
+        :return: 在支撑集上训练好的分类器
         """
-        # TODO: 实现支撑集上的分类器训练
-        # 提示：可以使用 LogisticRegression 作为查询集分类器。
-        pass
+        # 初始化一个逻辑回归分类器
+        classifier = LogisticRegression(
+            penalty="l2",
+            random_state=0,
+            C=1.0,
+            solver="lbfgs",
+            max_iter=1000,
+            multi_class="multinomial",
+        )
+
+        # Step 1: 特征归一化
+        # 归一化支撑集特征并转换为 numpy 格式，供分类器使用
+        support_feat = F.normalize(support_feat, p=2, dim=1).detach().cpu().numpy()
+        support_target = support_target.detach().cpu().numpy()
+
+        # Step 2: 分类器训练
+        # 在支撑集特征和标签上训练分类器
+        classifier.fit(support_feat, support_target)
+
+        return classifier
 
     def kd_group_loss(self, teacher_features, student_features, old_student_features):
         """
