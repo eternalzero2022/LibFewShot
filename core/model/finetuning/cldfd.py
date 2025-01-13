@@ -99,6 +99,10 @@ class CLDFD(FinetuningModel):
         with torch.no_grad():
             features = self.emb_func(images)
 
+        # 如果启用特征去噪，则对特征进行稀疏化处理
+        if self.feature_denoising.get("enable", False):
+            features = self.feature_denoising(features)
+
         # Step 2: 支撑集和查询集划分
         # 将批量数据分解为多个任务 (episode)，每个任务有支撑集和查询集
         support_feat, query_feat, support_target, query_target = self.split_by_episode(
@@ -182,8 +186,19 @@ class CLDFD(FinetuningModel):
 
     def feature_denoising(self, features):
         """
-        应用特征去噪到最后一层的输出。
+        对特征表示进行稀疏化（top-k 筛选）。
         """
-        # TODO: 实现特征去噪的逻辑
-        pass
+        k = self.feature_denoising.get("top_k", 10)  # 保留的最大激活值个数
+        batch_size, feature_dim = features.shape
+
+        # 获取每个样本特征的 top-k 索引
+        topk_indices = torch.topk(features, k, dim=-1).indices
+
+        # 构建稀疏化掩码
+        mask = torch.zeros_like(features)
+        mask.scatter_(dim=-1, index=topk_indices, value=1)
+
+        # 应用掩码保留 top-k 激活值
+        return features * mask
+
 
