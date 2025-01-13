@@ -1,0 +1,12 @@
+classifier:
+  name: CLDFD_PreTrain
+  kwargs:
+#    inner_param:
+#      inner_optim:
+#        name: Adam
+#        kwargs:
+#          lr: 1e-3
+#      inner_train_iter: 100
+#      inner_batch_size: 4
+    feat_dim: 512 # 这个参数是由resnet_10的输出决定的
+    num_class: 64
