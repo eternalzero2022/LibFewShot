@@ -195,7 +195,20 @@ class CLDFD(FinetuningModel):
         self.simclr_proj = Projector_SimCLR(self.feature_dim, self.ss_proj_dim)
         self.simclr_criterion = NTXentLoss('cuda', self.batch_size, temperature = self.temp, use_cosine_similarity = True)
 
+        self.kd_proj0 = nn.Sequential(nn.Conv2d(64, 128, 3, 2, 1),
+                                      nn.BatchNorm2d(128),
+                                      nn.ReLU(inplace=True))
+
+        self.kd_proj1 = nn.Sequential(nn.Conv2d(128, 256, 3, 2, 1),
+                                      nn.BatchNorm2d(256),
+                                      nn.ReLU(inplace=True))
+
+        self.kd_proj2 = nn.Sequential(nn.Conv2d(256, 512, 3, 2, 1),
+                                      nn.BatchNorm2d(512),
+                                      nn.ReLU(inplace=True))
+
         self.old_student = None
+        self.counter = 0
 
     def set_forward(self, batch):
         """
@@ -391,7 +404,25 @@ class CLDFD(FinetuningModel):
         # return distill_loss
 
         # TODO
-        pass
+        if epoch == 0:
+            loss_kd0 = F.mse_loss(self.kd_proj0(student_features[0]), teacher_features[0].detach())
+            loss_kd1 = F.mse_loss(self.kd_proj1(student_features[1]), teacher_features[1].detach())
+            loss_kd2 = F.mse_loss(self.kd_proj2(student_features[2]), teacher_features[2].detach())
+        else:
+            # TODO : 这个函数coef，epochs，trainloader不明确
+            momentum = self.args.coef * self.counter / (self.args.epochs * len(self.trainloader))
+            # TODO : old_student好像一直是None
+            self.old_student.eval()
+            with torch.no_grad():
+                f1_old_map, _ = self.old_student(X3, ret_layers=[5, 6, 7])
+                ft0 = (1 - momentum) * teacher_features[0].detach() + momentum * f1_old_map[0].detach()
+                ft1 = (1 - momentum) * teacher_features[1].detach() + momentum * f1_old_map[1].detach()
+                ft2 = (1 - momentum) * teacher_features[2].detach() + momentum * f1_old_map[2].detach()
+            loss_kd0 = F.mse_loss(self.kd_proj0(student_features[0]), ft0.detach())
+            loss_kd1 = F.mse_loss(self.kd_proj1(student_features[1]), ft1.detach())
+            loss_kd2 = F.mse_loss(self.kd_proj2(student_features[2]), ft2.detach())
+            self.counter += 1
+        return loss_kd0 + loss_kd1 + loss_kd2
 
     def feature_denoising(self, features):
         """

@@ -1,0 +1,8 @@
+classifier:
+  name: CLDFD
+  kwargs:
+    feat_dim: 512
+    num_class: 64
+    is_distill: True
+    emb_func_path: ./results/CLDFD_PreTrain-miniImageNet--ravi-ResNet10-5-1-Dec-05-2024-22-43-16/checkpoints/model_best.pth
+
