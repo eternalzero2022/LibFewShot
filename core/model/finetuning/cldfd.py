@@ -7,6 +7,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn import metrics
 import numpy as np
 
+
+from core.model.backbone import get_backbone
+from core.model.backbone.resnet_10 import ResNet10
 from core.utils import accuracy  # 计算准确率的工具函数
 from .finetuning_model import FinetuningModel  # 继承自少样本模型基础类
 from .. import DistillKLLoss
@@ -175,6 +178,14 @@ class CLDFD(FinetuningModel):
         self.pic_size = pic_size
         self.transform_type = transform_type
 
+        # 加载特征提取网络 (emb_func)，如果提供了路径则加载预训练模型
+        if emb_func_path is not None:
+            self.emb_func = torch.load(emb_func_path)  # 加载预训练模型
+        else:
+            # 如果没有指定路径，使用默认的网络模型ResNet10
+            self.emb_func = ResNet10()
+
+
         # 分类器
         self.classifier = nn.Linear(self.feat_dim, self.num_class)
         self.ce_loss_func = nn.CrossEntropyLoss()
@@ -270,33 +281,6 @@ class CLDFD(FinetuningModel):
         """
         训练阶段的前向传播，计算损失并进行梯度更新。
         """
-        # images, global_targets = batch
-        # images = images.to(self.device)
-        #
-        # # Step 1: 从学生模型提取特征
-        # student_features = self.emb_func(images)
-        #
-        # # Step 2: 使用 `old_student` 作为教师模型提取特征
-        # if self.old_student is not None:
-        #     # 使用 `old_student` 获取教师模型的特征
-        #     teacher_features = self.old_student(images)
-        # else:
-        #     # 如果没有 `old_student`，则使用当前模型的蒸馏层作为教师
-        #     teacher_features = self.distill_layer(images)
-        #
-        # # Step 3: 计算蒸馏损失 (蒸馏的任务)
-        # distill_loss = self.kd_group_loss(teacher_features, student_features)
-        #
-        # # Step 4: 计算分类损失
-        # classification_loss = self.ce_loss_func(student_features, global_targets)
-        #
-        # # Step 5: 组合总损失
-        # total_loss = classification_loss + self.gamma * distill_loss
-        #
-        # # 更新 old_student 为当前的学生模型（深拷贝）
-        # self.old_student = copy.deepcopy(self.emb_func)
-        #
-        # return total_loss
 
         images, global_targets = batch
         images = images.to(self.device)
@@ -382,36 +366,17 @@ class CLDFD(FinetuningModel):
 
         return classifier
 
-    def kd_group_loss(self, teacher_features, student_features, X3, epoch):
+    def kd_group_loss(self, teacher_features, student_features, X3, epoch = 60):
         """
         计算跨层知识蒸馏损失。
         """
-        # # Step 1: 定义蒸馏损失 (KL散度) 或其他相似度度量
-        # # 在此示例中，我们使用KL散度（可以更改为其他蒸馏损失策略）
-        # distill_loss = 0
-        # for l in range(len(teacher_features)):
-        #     teacher_feat = teacher_features[l]
-        #     student_feat = student_features[l]
-        #
-        #     # Step 2: 对特征进行归一化处理
-        #     teacher_feat = F.normalize(teacher_feat, p=2, dim=1)
-        #     student_feat = F.normalize(student_feat, p=2, dim=1)
-        #
-        #     # Step 3: 计算KL散度损失（可选其他损失形式）
-        #     distill_loss += self.kl_loss_func(student_feat, teacher_feat)
-        #
-        # # Step 4: 返回总的蒸馏损失
-        # return distill_loss
-
-        # TODO
         if epoch == 0:
             loss_kd0 = F.mse_loss(self.kd_proj0(student_features[0]), teacher_features[0].detach())
             loss_kd1 = F.mse_loss(self.kd_proj1(student_features[1]), teacher_features[1].detach())
             loss_kd2 = F.mse_loss(self.kd_proj2(student_features[2]), teacher_features[2].detach())
         else:
-            # TODO : 这个函数coef，epochs，trainloader不明确
-            momentum = self.args.coef * self.counter / (self.args.epochs * len(self.trainloader))
-            # TODO : old_student好像一直是None
+            # 当前训练轮次除以总训练轮次
+            momentum = self.counter / epoch
             self.old_student.eval()
             with torch.no_grad():
                 f1_old_map, _ = self.old_student(X3, ret_layers=[5, 6, 7])
