@@ -2,6 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 from sklearn.linear_model import LogisticRegression
 from sklearn import metrics
 import numpy as np
@@ -9,6 +10,23 @@ import numpy as np
 from core.utils import accuracy  # 计算准确率的工具函数
 from .finetuning_model import FinetuningModel  # 继承自少样本模型基础类
 from .. import DistillKLLoss
+from core.data.collates.contrib.autoaugment import ImageNetPolicy, CIFAR10Policy, SVHNPolicy, SubPolicy
+from core.trainer import Trainer
+
+
+class Projector_SimCLR(nn.Module):
+    """
+    用于 SimCLR 模型的投影层。
+    """
+    # TODO
+    pass
+
+class NTXentLoss(nn.Module):
+    """
+    用于 SimCLR 模型的负样本对损失计算。
+    """
+    # TODO
+    pass
 
 
 class DistillLayer(nn.Module):
@@ -54,12 +72,15 @@ class CLDFD(FinetuningModel):
         self,
         feat_dim,
         num_class,
+        batch_size,
         gamma=1,
         alpha=0,
         is_distill=False,
         kd_T=4,
         emb_func_path=None,
         feature_denoising=None,
+        pic_size=224,
+        transform_type="ImageNet",
         **kwargs
     ):
         super(CLDFD, self).__init__(**kwargs)
@@ -71,6 +92,8 @@ class CLDFD(FinetuningModel):
         self.alpha = alpha
         self.is_distill = is_distill
         self.feature_denoising = feature_denoising
+        self.pic_size = pic_size
+        self.transform_type = transform_type
 
         # 分类器
         self.classifier = nn.Linear(self.feat_dim, self.num_class)
@@ -83,6 +106,14 @@ class CLDFD(FinetuningModel):
             self.is_distill,
             emb_func_path,
         )
+
+        # 自适应损失
+        self.feature_dim = 512
+        self.ss_proj_dim = 128
+        self.temp = 1
+        self.batch_size = batch_size
+        self.simclr_proj = Projector_SimCLR(self.feature_dim, self.ss_proj_dim)
+        self.simclr_criterion = NTXentLoss('cuda', self.batch_size, temperature = self.temp, use_cosine_similarity = True)
 
         self.old_student = None
 
@@ -177,30 +208,57 @@ class CLDFD(FinetuningModel):
         images, global_targets = batch
         images = images.to(self.device)
 
-        # Step 1: 从学生模型提取特征
-        student_features, student_final = self.emb_func(images,ret_layers=[4, 5, 6])
+        # Transform step 1: 重新调整图像大小
+        resize_transform = transforms.Resize((self.pic_size, self.pic_size))
+        images = resize_transform(images)
 
-        # Step 2: 使用 `old_student` 作为教师模型提取特征
-        if self.old_student is not None:
-            # 使用 `old_student` 获取教师模型的特征
-            teacher_features, teacher_final = self.old_student(images, ret_layers=[5, 6, 7])
+        # Transform step 2: 定义数据增强策略
+        argumentation_policy = None
+        if(self.transform_type == "ImageNet"):
+            argumentation_policy = ImageNetPolicy()
+        elif(self.transform_type == "CIFAR10"):
+            argumentation_policy = CIFAR10Policy()
+        elif(self.transform_type == "SVHN"):
+            argumentation_policy = SVHNPolicy()
+        elif(self.transform_type == "SubPolicy"):
+            argumentation_policy = SubPolicy()
         else:
-            # 如果没有 `old_student`，则使用当前模型的蒸馏层作为教师
+            raise ValueError("Invalid transform_type. Choose from 'ImageNet', 'CIFAR10', 'SVHN', or 'SubPolicy'.")
+
+        # Transform step 3: 将图像根据三种不同的策略进行增强，获得三份不同的增强后的图像
+        X1 = argumentation_policy(images)
+        X2 = argumentation_policy(images)
+        X3 = argumentation_policy(images)
+
+        X1 = X1.to(self.device)
+        X2 = X2.to(self.device)
+        X3 = X3.to(self.device)
+
+        # Step 1: 从学生模型提取特征
+        student_features, student_final = self.emb_func(X1,ret_layers=[4, 5, 6])
+        student_features2, student_final2 = self.emb_func(X2, ret_layers=[4, 5, 6])
+
+        # Step 1.5: 处理学生模型输出用于计算自适应损失
+        z1_stu = self.simclr_proj(student_final)
+        z2_stu = self.simclr_proj(student_final2)
+        loss_sim = self.simclr_criterion(z1_stu, z2_stu)
+
+        # Step 2: 使用教师模型提取特征
+        with torch.no_grad():
             teacher_features, teacher_final = self.distill_layer(images, ret_layers=[5, 6, 7])
 
         # Step 3: 计算蒸馏损失 (蒸馏的任务)
-        distill_loss = self.kd_group_loss(teacher_features, student_features)
-
-        # Step 4: 计算分类损失
-        classification_loss = self.ce_loss_func(student_features, global_targets)
+        distill_loss = self.kd_group_loss(teacher_features, student_features, X3, epoch=Trainer.current_epoch)
 
         # Step 5: 组合总损失
-        total_loss = classification_loss + self.gamma * distill_loss
+        total_loss = loss_sim + self.gamma * distill_loss
 
         # 更新 old_student 为当前的学生模型（深拷贝）
         self.old_student = copy.deepcopy(self.emb_func)
 
-        return total_loss
+        acc = accuracy(student_final, global_targets)
+
+        return student_final, acc, total_loss
 
     def set_forward_adaptation(self, support_feat, support_target):
         """
@@ -231,26 +289,29 @@ class CLDFD(FinetuningModel):
 
         return classifier
 
-    def kd_group_loss(self, teacher_features, student_features):
+    def kd_group_loss(self, teacher_features, student_features, X3, epoch):
         """
         计算跨层知识蒸馏损失。
         """
-        # Step 1: 定义蒸馏损失 (KL散度) 或其他相似度度量
-        # 在此示例中，我们使用KL散度（可以更改为其他蒸馏损失策略）
-        distill_loss = 0
-        for l in range(len(teacher_features)):
-            teacher_feat = teacher_features[l]
-            student_feat = student_features[l]
+        # # Step 1: 定义蒸馏损失 (KL散度) 或其他相似度度量
+        # # 在此示例中，我们使用KL散度（可以更改为其他蒸馏损失策略）
+        # distill_loss = 0
+        # for l in range(len(teacher_features)):
+        #     teacher_feat = teacher_features[l]
+        #     student_feat = student_features[l]
+        #
+        #     # Step 2: 对特征进行归一化处理
+        #     teacher_feat = F.normalize(teacher_feat, p=2, dim=1)
+        #     student_feat = F.normalize(student_feat, p=2, dim=1)
+        #
+        #     # Step 3: 计算KL散度损失（可选其他损失形式）
+        #     distill_loss += self.kl_loss_func(student_feat, teacher_feat)
+        #
+        # # Step 4: 返回总的蒸馏损失
+        # return distill_loss
 
-            # Step 2: 对特征进行归一化处理
-            teacher_feat = F.normalize(teacher_feat, p=2, dim=1)
-            student_feat = F.normalize(student_feat, p=2, dim=1)
-
-            # Step 3: 计算KL散度损失（可选其他损失形式）
-            distill_loss += self.kl_loss_func(student_feat, teacher_feat)
-
-        # Step 4: 返回总的蒸馏损失
-        return distill_loss
+        # TODO
+        pass
 
     def feature_denoising(self, features):
         """

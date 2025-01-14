@@ -39,6 +39,8 @@ class Trainer(object):
     Build a trainer from config dict, set up optimizer, model, etc. Train/test/val and log.
     """
 
+    current_epoch = 0
+
     def __init__(self, rank, config):
         self.rank = rank
         self.config = config
@@ -76,6 +78,7 @@ class Trainer(object):
         """
         experiment_begin = time()
         for epoch_idx in range(self.from_epoch + 1, self.config["epoch"]):
+            current_epoch = epoch_idx
             if self.distribute and self.model_type == ModelType.FINETUNING:
                 self.train_loader[0].sampler.set_epoch(epoch_idx)
             print("============ Train on the train set ============")
