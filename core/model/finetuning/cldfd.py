@@ -36,12 +36,12 @@ class DistillLayer(nn.Module):
         return new_model
 
     @torch.no_grad()
-    def forward(self, x):
+    def forward(self, x, ret_layers=None):
         """
         蒸馏层的前向传播。
         """
         if self.emb_func is not None:
-            output = self.emb_func(x)
+            output = self.emb_func(x, ret_layers)
             return output
         return None
 
@@ -146,19 +146,47 @@ class CLDFD(FinetuningModel):
         """
         训练阶段的前向传播，计算损失并进行梯度更新。
         """
+        # images, global_targets = batch
+        # images = images.to(self.device)
+        #
+        # # Step 1: 从学生模型提取特征
+        # student_features = self.emb_func(images)
+        #
+        # # Step 2: 使用 `old_student` 作为教师模型提取特征
+        # if self.old_student is not None:
+        #     # 使用 `old_student` 获取教师模型的特征
+        #     teacher_features = self.old_student(images)
+        # else:
+        #     # 如果没有 `old_student`，则使用当前模型的蒸馏层作为教师
+        #     teacher_features = self.distill_layer(images)
+        #
+        # # Step 3: 计算蒸馏损失 (蒸馏的任务)
+        # distill_loss = self.kd_group_loss(teacher_features, student_features)
+        #
+        # # Step 4: 计算分类损失
+        # classification_loss = self.ce_loss_func(student_features, global_targets)
+        #
+        # # Step 5: 组合总损失
+        # total_loss = classification_loss + self.gamma * distill_loss
+        #
+        # # 更新 old_student 为当前的学生模型（深拷贝）
+        # self.old_student = copy.deepcopy(self.emb_func)
+        #
+        # return total_loss
+
         images, global_targets = batch
         images = images.to(self.device)
 
         # Step 1: 从学生模型提取特征
-        student_features = self.emb_func(images)
+        student_features, student_final = self.emb_func(images,ret_layers=[4, 5, 6])
 
         # Step 2: 使用 `old_student` 作为教师模型提取特征
         if self.old_student is not None:
             # 使用 `old_student` 获取教师模型的特征
-            teacher_features = self.old_student(images)
+            teacher_features, teacher_final = self.old_student(images, ret_layers=[5, 6, 7])
         else:
             # 如果没有 `old_student`，则使用当前模型的蒸馏层作为教师
-            teacher_features = self.distill_layer(images)
+            teacher_features, teacher_final = self.distill_layer(images, ret_layers=[5, 6, 7])
 
         # Step 3: 计算蒸馏损失 (蒸馏的任务)
         distill_loss = self.kd_group_loss(teacher_features, student_features)
