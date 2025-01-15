@@ -147,7 +147,7 @@ class DistillLayer(nn.Module):
 
 class CLDFD(FinetuningModel):
     """
-    Cross-Level Distillation and Feature Denoising (CLDFD) 模型。
+    Cross-Level Distillation and Feature Denoising (CLDFD.yaml) 模型。
     """
     def __init__(
         self,
@@ -162,6 +162,10 @@ class CLDFD(FinetuningModel):
         feature_denoising=None,
         pic_size=224,
         transform_type="ImageNet",
+        feature_dim=512,
+        ss_proj_dim=128,
+        temperature=1,
+        epoch=60,
         **kwargs
     ):
         super(CLDFD, self).__init__(**kwargs)
@@ -175,6 +179,7 @@ class CLDFD(FinetuningModel):
         self.feature_denoising = feature_denoising
         self.pic_size = pic_size
         self.transform_type = transform_type
+        self.epoch = epoch
 
 
 
@@ -190,13 +195,13 @@ class CLDFD(FinetuningModel):
             emb_func_path,
         )
 
-        # 自适应损失
-        self.feature_dim = 512
-        self.ss_proj_dim = 128
-        self.temp = 1
+        # 自监督损失
+        self.feature_dim = feature_dim
+        self.ss_proj_dim = ss_proj_dim
+        self.temperature = temperature
         self.batch_size = batch_size
         self.simclr_proj = Projector_SimCLR(self.feature_dim, self.ss_proj_dim)
-        self.simclr_criterion = NTXentLoss('cuda', self.batch_size, temperature = self.temp, use_cosine_similarity = True)
+        self.simclr_criterion = NTXentLoss('cuda', self.batch_size, temperature = self.temperature, use_cosine_similarity = True)
 
         self.kd_proj0 = nn.Sequential(nn.Conv2d(64, 128, 3, 2, 1),
                                       nn.BatchNorm2d(128),
@@ -367,7 +372,7 @@ class CLDFD(FinetuningModel):
             loss_kd2 = F.mse_loss(self.kd_proj2(student_features[2]), teacher_features[2].detach())
         else:
             # 当前训练轮次除以总训练轮次
-            momentum = epoch / 60
+            momentum = epoch / self.epoch
             self.old_student.eval()
             with torch.no_grad():
                 f1_old_map, _ = self.old_student(X3, ret_layers=[5, 6, 7])
