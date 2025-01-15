@@ -2,8 +2,10 @@
 - config/backbones/resnet10.yaml
 - config/classifiers/CLDFD_pretrain.yaml
 - config/cldfd_pretrain.yaml
+- config/cldfd.yaml
 - core/model/backbone/resnet_10.py
 - core/model/finetuning/cldfd_pretrain.py
+- core/model/finetuning/cldfd.py
 
 ## 修改的模块
 - core/model/backbone/\_\_init\_\_.py
