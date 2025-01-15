@@ -8,8 +8,6 @@ from sklearn import metrics
 import numpy as np
 
 
-from core.model.backbone import get_backbone
-from core.model.backbone.resnet_10 import ResNet10
 from core.utils import accuracy  # 计算准确率的工具函数
 from .finetuning_model import FinetuningModel  # 继承自少样本模型基础类
 from .. import DistillKLLoss
@@ -178,12 +176,6 @@ class CLDFD(FinetuningModel):
         self.pic_size = pic_size
         self.transform_type = transform_type
 
-        # 加载特征提取网络 (emb_func)，如果提供了路径则加载预训练模型
-        if emb_func_path is not None:
-            self.emb_func = torch.load(emb_func_path)  # 加载预训练模型
-        else:
-            # 如果没有指定路径，使用默认的网络模型ResNet10
-            self.emb_func = ResNet10()
 
 
         # 分类器
@@ -219,7 +211,6 @@ class CLDFD(FinetuningModel):
                                       nn.ReLU(inplace=True))
 
         self.old_student = None
-        self.counter = 0
 
     def set_forward(self, batch):
         """
@@ -366,7 +357,7 @@ class CLDFD(FinetuningModel):
 
         return classifier
 
-    def kd_group_loss(self, teacher_features, student_features, X3, epoch = 60):
+    def kd_group_loss(self, teacher_features, student_features, X3, epoch = 0):
         """
         计算跨层知识蒸馏损失。
         """
@@ -376,7 +367,7 @@ class CLDFD(FinetuningModel):
             loss_kd2 = F.mse_loss(self.kd_proj2(student_features[2]), teacher_features[2].detach())
         else:
             # 当前训练轮次除以总训练轮次
-            momentum = self.counter / epoch
+            momentum = epoch / 60
             self.old_student.eval()
             with torch.no_grad():
                 f1_old_map, _ = self.old_student(X3, ret_layers=[5, 6, 7])
@@ -386,7 +377,6 @@ class CLDFD(FinetuningModel):
             loss_kd0 = F.mse_loss(self.kd_proj0(student_features[0]), ft0.detach())
             loss_kd1 = F.mse_loss(self.kd_proj1(student_features[1]), ft1.detach())
             loss_kd2 = F.mse_loss(self.kd_proj2(student_features[2]), ft2.detach())
-            self.counter += 1
         return loss_kd0 + loss_kd1 + loss_kd2
 
     def feature_denoising(self, features):
