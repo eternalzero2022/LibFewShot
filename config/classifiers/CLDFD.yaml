@@ -7,7 +7,7 @@ classifier:
     gamma: 1 # 计算总损失时蒸馏损失的占比
     alpha: 0
     is_distill: True
-    emb_func_path: ./results/CLDFD_PreTrain-miniImageNet--ravi-ResNet10-5-1-Dec-05-2024-22-43-16/checkpoints/model_best.pth
+    emb_func_path: ./results/CLDFD_PreTrain-miniImageNet--ravi-ResNet10-5-1-Dec-05-2024-22-43-16/checkpoints/emb_func_best.pth
     # 特征去噪部分参数
     feature_denoising:
       enable: True

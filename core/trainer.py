@@ -11,9 +11,9 @@ import yaml
 from torch import nn
 import torch.distributed as dist
 
-from queue import Queue
 import core.model as arch
 from core.data import get_dataloader
+from core.utils.runtime_data import RuntimeData
 from core.utils import (
     AverageMeter,
     ModelType,
@@ -27,7 +27,6 @@ from core.utils import (
     prepare_device,
     save_model,
     get_instance,
-    data_prefetcher,
     GradualWarmupScheduler,
 )
 
@@ -39,7 +38,7 @@ class Trainer(object):
     Build a trainer from config dict, set up optimizer, model, etc. Train/test/val and log.
     """
 
-    current_epoch = 0
+
 
     def __init__(self, rank, config):
         self.rank = rank
@@ -78,7 +77,7 @@ class Trainer(object):
         """
         experiment_begin = time()
         for epoch_idx in range(self.from_epoch + 1, self.config["epoch"]):
-            current_epoch = epoch_idx
+            RuntimeData.current_epoch = epoch_idx
             if self.distribute and self.model_type == ModelType.FINETUNING:
                 self.train_loader[0].sampler.set_epoch(epoch_idx)
             print("============ Train on the train set ============")

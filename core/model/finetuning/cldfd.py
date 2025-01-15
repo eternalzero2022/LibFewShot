@@ -12,7 +12,7 @@ from core.utils import accuracy  # 计算准确率的工具函数
 from .finetuning_model import FinetuningModel  # 继承自少样本模型基础类
 from .. import DistillKLLoss
 from core.data.collates.contrib.autoaugment import ImageNetPolicy, CIFAR10Policy, SVHNPolicy, SubPolicy
-from core.trainer import Trainer
+from core.utils.runtime_data import RuntimeData
 
 
 class Projector_SimCLR(nn.Module):
@@ -131,7 +131,11 @@ class DistillLayer(nn.Module):
         if is_distill and state_dict_path is not None:
             new_model = copy.deepcopy(model)
             model_state_dict = torch.load(state_dict_path, map_location="cpu")
-            new_model.load_state_dict(model_state_dict)
+
+            new_state_dict = {key.replace('emb_func.', ''): value for key, value in model_state_dict.items()}
+
+            # new_model.load_state_dict(model_state_dict)
+            new_model.load_state_dict(new_state_dict)
         return new_model
 
     @torch.no_grad()
@@ -280,6 +284,7 @@ class CLDFD(FinetuningModel):
 
         images, global_targets = batch
         images = images.to(self.device)
+        global_targets = global_targets.to(self.device)
 
         # Transform step 1: 重新调整图像大小
         resize_transform = transforms.Resize((self.pic_size, self.pic_size))
@@ -298,11 +303,56 @@ class CLDFD(FinetuningModel):
         else:
             raise ValueError("Invalid transform_type. Choose from 'ImageNet', 'CIFAR10', 'SVHN', or 'SubPolicy'.")
 
-        # Transform step 3: 将图像根据三种不同的策略进行增强，获得三份不同的增强后的图像
-        X1 = argumentation_policy(images)
-        X2 = argumentation_policy(images)
-        X3 = argumentation_policy(images)
+        # # Transform step 3: 将图像根据三种不同的策略进行增强，获得三份不同的增强后的图像
+        # to_pil = transforms.ToPILImage()
+        # img_pil = to_pil(images)
+        #
+        # X1_pil = argumentation_policy(img_pil)
+        # X2_pil = argumentation_policy(img_pil)
+        # X3_pil = argumentation_policy(img_pil)
+        #
+        # to_tensor = transforms.ToTensor()
+        #
+        # X1 = to_tensor(X1_pil)
+        # X2 = to_tensor(X2_pil)
+        # X3 = to_tensor(X3_pil)
+        #
+        # X1 = X1.to(self.device)
+        # X2 = X2.to(self.device)
+        # X3 = X3.to(self.device)
 
+        # Transform step 3: 将图像根据三种不同的策略进行增强，获得三份不同的增强后的图像
+        to_pil = transforms.ToPILImage()
+
+        # 假设 'images' 的形状为 (N, C, H, W)
+        # 首先将张量批量转换为 PIL 图像列表
+        img_pils = [to_pil(images[i]) for i in range(images.shape[0])]
+
+        # 创建空列表来存储增强后的图像
+        X1_pil = []
+        X2_pil = []
+        X3_pil = []
+
+        # 针对每个 PIL 图像应用增强策略
+        for img in img_pils:
+            enhanced_X1 = argumentation_policy(img)  # 单个图像
+            enhanced_X2 = argumentation_policy(img)  # 单个图像
+            enhanced_X3 = argumentation_policy(img)  # 单个图像
+
+            # 将增强后的图像添加到列表中
+            X1_pil.append(enhanced_X1)
+            X2_pil.append(enhanced_X2)
+            X3_pil.append(enhanced_X3)
+
+        # 将增强后的 PIL 图像转换回 Tensor
+        to_tensor = transforms.ToTensor()
+
+        # 使用 torch.stack 将增强的 PIL 图像列表转换为 Tensor
+        X1 = torch.stack([to_tensor(x) for x in X1_pil])
+        X2 = torch.stack([to_tensor(x) for x in X2_pil])
+        X3 = torch.stack([to_tensor(x) for x in X3_pil])
+
+        # 将每个 Tensor 移动到所需的设备
         X1 = X1.to(self.device)
         X2 = X2.to(self.device)
         X3 = X3.to(self.device)
@@ -321,7 +371,7 @@ class CLDFD(FinetuningModel):
             teacher_features, teacher_final = self.distill_layer(images, ret_layers=[5, 6, 7])
 
         # Step 3: 计算蒸馏损失 (蒸馏的任务)
-        distill_loss = self.kd_group_loss(teacher_features, student_features, X3, epoch=Trainer.current_epoch)
+        distill_loss = self.kd_group_loss(teacher_features, student_features, X3, epoch=RuntimeData.current_epoch)
 
         # Step 5: 组合总损失
         total_loss = loss_sim + self.gamma * distill_loss
