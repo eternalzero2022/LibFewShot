@@ -238,7 +238,7 @@ class CLDFD(FinetuningModel):
 
         # 如果启用特征去噪，则对特征进行稀疏化处理
         if self.feature_denoising.get("enable", False):
-            features = self.feature_denoising(features)
+            features = self.feature_denoising_func(features)
 
         # Step 2: 支撑集和查询集划分
         # 将批量数据分解为多个任务 (episode)，每个任务有支撑集和查询集
@@ -322,6 +322,8 @@ class CLDFD(FinetuningModel):
         # X3 = X3.to(self.device)
 
         # Transform step 3: 将图像根据三种不同的策略进行增强，获得三份不同的增强后的图像
+
+        # print("start-transform")
         to_pil = transforms.ToPILImage()
 
         # 假设 'images' 的形状为 (N, C, H, W)
@@ -331,18 +333,18 @@ class CLDFD(FinetuningModel):
         # 创建空列表来存储增强后的图像
         X1_pil = []
         X2_pil = []
-        X3_pil = []
+        # X3_pil = []
 
         # 针对每个 PIL 图像应用增强策略
         for img in img_pils:
             enhanced_X1 = argumentation_policy(img)  # 单个图像
             enhanced_X2 = argumentation_policy(img)  # 单个图像
-            enhanced_X3 = argumentation_policy(img)  # 单个图像
+            # enhanced_X3 = argumentation_policy(img)  # 单个图像
 
             # 将增强后的图像添加到列表中
             X1_pil.append(enhanced_X1)
             X2_pil.append(enhanced_X2)
-            X3_pil.append(enhanced_X3)
+            # X3_pil.append(enhanced_X3)
 
         # 将增强后的 PIL 图像转换回 Tensor
         to_tensor = transforms.ToTensor()
@@ -350,12 +352,14 @@ class CLDFD(FinetuningModel):
         # 使用 torch.stack 将增强的 PIL 图像列表转换为 Tensor
         X1 = torch.stack([to_tensor(x) for x in X1_pil])
         X2 = torch.stack([to_tensor(x) for x in X2_pil])
-        X3 = torch.stack([to_tensor(x) for x in X3_pil])
+        # X3 = torch.stack([to_tensor(x) for x in X3_pil])
+
+        # print("end-transform")
 
         # 将每个 Tensor 移动到所需的设备
         X1 = X1.to(self.device)
         X2 = X2.to(self.device)
-        X3 = X3.to(self.device)
+        # X3 = X3.to(self.device)
 
         # Step 1: 从学生模型提取特征
         student_features, student_final = self.emb_func(X1,ret_layers=[4, 5, 6])
@@ -371,15 +375,28 @@ class CLDFD(FinetuningModel):
             teacher_features, teacher_final = self.distill_layer(images, ret_layers=[5, 6, 7])
 
         # Step 3: 计算蒸馏损失 (蒸馏的任务)
-        distill_loss = self.kd_group_loss(teacher_features, student_features, X3, epoch=RuntimeData.current_epoch)
+        distill_loss = self.kd_group_loss(teacher_features, student_features, X2, epoch=RuntimeData.current_epoch)
 
         # Step 5: 组合总损失
         total_loss = loss_sim + self.gamma * distill_loss
 
+        # print("zsyss=", loss_sim)
+        # print("zlss=",distill_loss)
+
         # 更新 old_student 为当前的学生模型（深拷贝）
         self.old_student = copy.deepcopy(self.emb_func)
 
-        acc = accuracy(student_final, global_targets)
+        output = self.classifier(student_final)
+
+
+        acc = accuracy(output, global_targets)
+
+        # print("---acc---")
+        # print(student_final)
+        # print("Output:", output.cpu().detach().numpy())  # 打印模型预测的输出
+        # print("Global Targets:", global_targets.cpu().detach().numpy())  # 打印实际的标签
+        # print("Output Shape:", output.shape)  # 打印output的形状
+        # print("Global Targets Shape:", global_targets.shape)  # 打印global_targets的形状
 
         return student_final, acc, total_loss
 
@@ -434,7 +451,7 @@ class CLDFD(FinetuningModel):
             loss_kd2 = F.mse_loss(self.kd_proj2(student_features[2]), ft2.detach())
         return loss_kd0 + loss_kd1 + loss_kd2
 
-    def feature_denoising(self, features):
+    def feature_denoising_func(self, features):
         """
         对特征表示进行稀疏化（top-k 筛选）。
         """

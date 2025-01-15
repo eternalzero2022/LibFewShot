@@ -44,7 +44,7 @@ classifier:
     ss_proj_dim: 128
     temperature: 1
     # epoch数，用于kdloss计算时使用
-    epoch: 60
+    epoch: 20
 
 
 
@@ -63,7 +63,7 @@ backbone:
 optimizer:
   name: SGD
   kwargs:
-    lr: 0.1
+    lr: 0.05
     momentum: 0.9
     weight_decay: 1e-4
     nesterov: False
@@ -82,8 +82,8 @@ lr_scheduler:
 #    step_size: 30
   name: MultiStepLR # 这是原本cldfd使用的学习率调整器
   kwargs:
-    gamma: 0.1
-    milestones: [30,50]
+    gamma: 0.2
+    milestones: [10,15]
     last_epoch: -1
 
 warmup: 0 # set 0 to turn off warmup

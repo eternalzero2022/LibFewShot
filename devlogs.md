@@ -16,3 +16,4 @@
 - 修改了权重读取路径，将model_best.pth改为emb_func_best.pth
 - 将core/data/collates/contrib/autoaugment.py中第175行的astype(np.int)改为astype(int)
 - cldfd.py的set_forward_loss中将图像先转变为pil的形式然后再转变为tensor的形式
+- 添加了self.classifier的定义
